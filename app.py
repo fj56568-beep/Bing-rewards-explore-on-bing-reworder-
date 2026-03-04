@@ -1,64 +1,68 @@
 import streamlit as st
 import random
-import socketio
 import threading
+import socketio
 from flask import Flask
+from transformers import pipeline
 
-# 1. SETUP FILLER CLEANER
-FILLER_PHRASES = ["search on bing to find", "search on bing for", "deals and reviews for your next", "search for", "find deals and reviews", "to find", "looking for"]
+# 1. AI MODEL SETUP (Cached so it only loads once)
+@st.cache_resource
+def load_ai_brain():
+    # This model is specifically trained to paraphrase robotic text into natural speech
+    return pipeline("text2text-generation", model="Vamsi/T5_Paraphrase_Puzzler")
 
-def extract_core_subject(text):
-    clean = text.lower()
-    for phrase in FILLER_PHRASES:
-        clean = clean.replace(phrase, "")
-    clean = clean.replace("your next", "").replace("the best", "").strip()
-    words = clean.split()
-    return " ".join(words[-2:]) if len(words) > 4 else clean
+rewriter = load_ai_brain()
 
-# 2. NICHE CONFIG
-NICHE_MAP = {
-    "book": {
-        "templates": ["I'm trying to find a {adj} copy of {item} {extra} in {loc}.", "Where can I buy a {adj} {item} {extra} near {loc}?"],
-        "details": ["hardcover first edition", "signed collector's"],
-        "context": ["with the original dust jacket", "from a local seller"]
-    },
-    "default": {
-        "templates": ["Where is the best place to find {item} in {loc}?", "Looking for {adj} {item} {extra} near {loc}."],
-        "details": ["top-rated", "reliable"],
-        "context": ["at a good price", "with local delivery"]
-    }
-}
-
-# 3. SOCKET SERVER
+# 2. SOCKET.IO SERVER SETUP
 sio = socketio.Server(cors_allowed_origins="*")
-app = Flask(__name__)
-app.wsgi_app = socketio.WSGIApp(sio, app.wsgi_app)
+flask_app = Flask(__name__)
+flask_app.wsgi_app = socketio.WSGIApp(sio, flask_app.wsgi_app)
 
-def run_socket():
+def run_socket_server():
     import eventlet
-    eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 5001)), app)
+    # Port 5001 is used to avoid conflict with Streamlit's port 8501
+    eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 5001)), flask_app)
 
-if 'socket_thread' not in st.session_state:
-    threading.Thread(target=run_socket, daemon=True).start()
-    st.session_state['socket_thread'] = True
+if 'socket_started' not in st.session_state:
+    threading.Thread(target=run_socket_server, daemon=True).start()
+    st.session_state['socket_started'] = True
 
-# 4. UI AND LOGIC
-st.title("🚀 Multi-Profile Natural Broadcaster")
-location = st.sidebar.text_input("My Location", "Sydney, NSW")
-pasted_data = st.text_area("Paste your search list here:", height=300)
+# 3. THE "HUMANIZER" LOGIC
+def generate_natural_query(robotic_text):
+    # Strip the "Search on Bing" noise before feeding to AI
+    clean = robotic_text.lower().replace("search on bing to", "").replace("search on bing for", "").strip()
+    
+    # AI Inference
+    results = rewriter(
+        f"paraphrase: {clean}", 
+        max_length=50, 
+        do_sample=True, 
+        top_p=0.95
+    )
+    return results[0]['generated_text']
 
-if st.button("Generate & Push to All Profiles"):
-    lines = pasted_data.split('\n')
-    for line in lines:
-        if line.strip():
-            subject = extract_core_subject(line)
-            niche = "book" if "book" in subject else "default"
-            config = NICHE_MAP[niche]
-            query = random.choice(config["templates"]).format(
-                adj=random.choice(config["details"]),
-                item=subject,
-                extra=random.choice(config["context"]),
-                loc=location
-            )
-            sio.emit('new_search', {'query': query})
-            st.success(f"Broadcasted: {query}")
+# 4. STREAMLIT UI
+st.set_page_config(page_title="AI Natural Broadcaster", page_icon="🌿")
+st.title("🌿 AI Natural Search Broadcaster")
+st.markdown("Automates your daily task list into human-like search queries across all profiles.")
+
+pasted_list = st.text_area("Paste your robotic 16 queries here:", height=300)
+
+if st.button("🚀 Humanize & Broadcast to Profiles"):
+    lines = pasted_list.split('\n')
+    valid_lines = [l.strip() for l in lines if l.strip()]
+    
+    if valid_lines:
+        progress_bar = st.progress(0)
+        for i, line in enumerate(valid_lines):
+            # Generate the natural version
+            natural_query = generate_natural_query(line)
+            
+            # Broadcast to all connected Chrome Profiles (Freddy, Zaky, etc.)
+            sio.emit('new_search', {'query': natural_query})
+            
+            # Show success in UI
+            st.success(f"**Sent:** {natural_query}")
+            progress_bar.progress((i + 1) / len(valid_lines))
+    else:
+        st.warning("Please paste a list first.")
