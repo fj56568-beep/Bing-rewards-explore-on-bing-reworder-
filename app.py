@@ -5,11 +5,11 @@ import socketio
 from flask import Flask
 from transformers import pipeline
 
-# 1. AI MODEL SETUP (Cached so it only loads once)
+# 1. AI MODEL SETUP (Using t5-small for memory efficiency)
 @st.cache_resource
 def load_ai_brain():
-    # This model is specifically trained to paraphrase robotic text into natural speech
-    return pipeline("text2text-generation", model="Vamsi/T5_Paraphrase_Puzzler")
+    # t5-small is the best balance of speed and size for Streamlit Cloud
+    return pipeline("text2text-generation", model="t5-small")
 
 rewriter = load_ai_brain()
 
@@ -20,7 +20,7 @@ flask_app.wsgi_app = socketio.WSGIApp(sio, flask_app.wsgi_app)
 
 def run_socket_server():
     import eventlet
-    # Port 5001 is used to avoid conflict with Streamlit's port 8501
+    # Streamlit uses 8501, we use 5001 for the Chrome Extensions
     eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 5001)), flask_app)
 
 if 'socket_started' not in st.session_state:
@@ -29,40 +29,41 @@ if 'socket_started' not in st.session_state:
 
 # 3. THE "HUMANIZER" LOGIC
 def generate_natural_query(robotic_text):
-    # Strip the "Search on Bing" noise before feeding to AI
-    clean = robotic_text.lower().replace("search on bing to", "").replace("search on bing for", "").strip()
+    # STEP A: Strip the robotic shell
+    clean = robotic_text.lower()
+    fillers = ["search on bing to find", "search on bing for", "search on bing to"]
+    for f in fillers:
+        clean = clean.replace(f, "")
+    clean = clean.strip()
     
-    # AI Inference
+    # STEP B: AI Rewrite
+    # T5 expects "paraphrase: " as a prefix
+    prompt = f"paraphrase: {clean}"
     results = rewriter(
-        f"paraphrase: {clean}", 
+        prompt, 
         max_length=50, 
         do_sample=True, 
-        top_p=0.95
+        top_p=0.9, 
+        temperature=0.7 # Higher = more "creative" variations
     )
     return results[0]['generated_text']
 
 # 4. STREAMLIT UI
-st.set_page_config(page_title="AI Natural Broadcaster", page_icon="🌿")
-st.title("🌿 AI Natural Search Broadcaster")
-st.markdown("Automates your daily task list into human-like search queries across all profiles.")
+st.set_page_config(page_title="Natural Query Broadcaster", page_icon="🌿")
+st.title("🌿 Natural AI Broadcaster")
 
-pasted_list = st.text_area("Paste your robotic 16 queries here:", height=300)
+pasted_list = st.text_area("Paste your 16 robotic queries here:", height=300)
 
-if st.button("🚀 Humanize & Broadcast to Profiles"):
-    lines = pasted_list.split('\n')
-    valid_lines = [l.strip() for l in lines if l.strip()]
+if st.button("🚀 Humanize & Broadcast"):
+    lines = [l.strip() for l in pasted_list.split('\n') if l.strip()]
     
-    if valid_lines:
-        progress_bar = st.progress(0)
-        for i, line in enumerate(valid_lines):
-            # Generate the natural version
+    if lines:
+        for line in lines:
             natural_query = generate_natural_query(line)
             
-            # Broadcast to all connected Chrome Profiles (Freddy, Zaky, etc.)
+            # Send to Freddy, Zaky, and the other 5+ profiles
             sio.emit('new_search', {'query': natural_query})
             
-            # Show success in UI
-            st.success(f"**Sent:** {natural_query}")
-            progress_bar.progress((i + 1) / len(valid_lines))
+            st.success(f"**Broadcasted:** {natural_query}")
     else:
         st.warning("Please paste a list first.")
