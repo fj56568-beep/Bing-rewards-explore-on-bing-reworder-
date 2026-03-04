@@ -1,106 +1,63 @@
 import streamlit as st
 import random
 import socketio
-import eventlet
 import threading
+from flask import Flask
 
-# 1. THE HIGH-SPECIFICITY DICTIONARY (Your "Training" Data)
-# We organize fragments by niche to ensure the queries stay data-driven and natural.
-NICHE_DATA = {
+# THE BRAIN: This ensures "Books" get "Book details" and "Cars" get "Car details"
+NICHE_MAP = {
     "book": {
-        "adjectives": ["hardcover first edition", "signed collector's", "limited print", "illustrated"],
-        "specs": ["with original dust jacket", "printed on acid-free paper", "from an independent publisher"],
-        "structure": "I'm looking for a {adj} copy of a {item} {spec} available near {location}."
+        "details": ["hardcover first edition", "signed collector's", "illustrated"],
+        "context": ["with original dust jacket", "from an independent bookstore"],
+        "template": "Looking for a {adj} {item} {extra} in {loc}"
     },
     "diy": {
-        "adjectives": ["advanced STEM", "eco-friendly beginner", "professional-grade woodworking", "high-quality"],
-        "specs": ["with a complete tool-kit included", "featuring step-by-step video guides", "using non-toxic materials"],
-        "structure": "Where can I source {adj} {item} {spec} for a home project in {location}?"
+        "details": ["advanced STEM", "eco-friendly", "woodworking"],
+        "context": ["with step-by-step guides", "complete starter kit"],
+        "template": "Best {adj} {item} {extra} near {loc}"
     },
-    "insurance": {
-        "adjectives": ["comprehensive PPO", "high-limit liability", "low-deductible", "customizable"],
-        "specs": ["with zero out-of-pocket maximums", "including 2026 wellness benefits", "with multi-policy discounts"],
-        "structure": "Compare the best {adj} {item} plans {spec} specifically for residents in {location}."
-    },
-    "cars": {
-        "adjectives": ["certified pre-owned", "fuel-efficient hybrid", "low-mileage", "fully loaded"],
-        "specs": ["with a clean CARFAX report", "including a manufacturer extended warranty", "featuring the latest safety tech"],
-        "structure": "Find deals on {adj} {item} models {spec} within 50 miles of {location}."
-    },
-    "shopping": {
-        "adjectives": ["heavy-duty", "ergonomic", "highly-rated", "top-tier"],
-        "specs": ["with free express shipping", "at the lowest price point for 2026", "with a lifetime satisfaction guarantee"],
-        "structure": "Sourcing {adj} {item} {spec} with fast delivery to {location}."
+    "default": {
+        "details": ["top-rated", "premium quality", "2026 version"],
+        "context": ["with fast shipping", "best price"],
+        "template": "Sourcing {adj} {item} {extra} available in {loc}"
     }
 }
 
-# 2. KEYWORD EXTRACTION & GENERATION LOGIC
-def generate_specific_query(pasted_line, location):
-    # Mapping words found in your list to our dictionary keys
-    mapping = {
-        "book": "book",
-        "diy": "diy",
-        "kit": "diy",
-        "craft": "diy",
-        "insurance": "insurance",
-        "car": "cars",
-        "auto": "cars",
-        "item": "shopping",
-        "shopping": "shopping"
-    }
-    
-    # Identify subject
-    category_key = "shopping" # Default
-    for word, cat in mapping.items():
-        if word in pasted_line.lower():
-            category_key = cat
-            break
-            
-    niche = NICHE_DATA.get(category_key)
-    
-    # Randomly assemble fragments
-    return niche["structure"].format(
-        adj=random.choice(niche["adjectives"]),
-        item=category_key,
-        spec=random.choice(niche["specs"]),
-        location=location
-    )
-
-# 3. SOCKET.IO SERVER SETUP (To communicate with multiple browser profiles)
+# SOCKET SERVER: To talk to your "Freddy", "Zaky", and "Work" profiles
 sio = socketio.Server(cors_allowed_origins="*")
-app = socketio.WSGIApp(sio)
+app = Flask(__name__)
+app.wsgi_app = socketio.WSGIApp(sio, app.wsgi_app)
 
-def run_socket_server():
-    eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 5000)), app)
+def run_socket():
+    # We use port 5001 to avoid Streamlit conflicts
+    import eventlet
+    eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 5001)), app)
 
-# Start server in a background thread so Streamlit can still run
-if 'socket_started' not in st.session_state:
-    threading.Thread(target=run_socket_server, daemon=True).start()
-    st.session_state['socket_started'] = True
+if 'socket_thread' not in st.session_state:
+    threading.Thread(target=run_socket, daemon=True).start()
+    st.session_state['socket_thread'] = True
 
-# 4. STREAMLIT UI
-st.set_page_config(page_title="Smart Query Broadcaster", layout="wide")
-st.title("🚀 Multi-Profile Query Broadcaster")
+# UI
+st.title("Profile Search Broadcaster")
+location = st.text_input("Target Location", "Sydney, NSW")
+pasted_data = st.text_area("Paste your list here:")
 
-# Sidebar for global context injection
-st.sidebar.header("Global Settings")
-user_location = st.sidebar.text_input("My Location", value="Sydney, NSW")
-
-# Input Area
-pasted_list = st.text_area("Paste your Daily List here:", height=300, 
-                           placeholder="Search for your next book...\nSearch for car deals...")
-
-if st.button("Generate & Push to All Profiles"):
-    lines = [line.strip() for line in pasted_list.split('\n') if line.strip()]
-    
-    if lines:
-        results = []
-        for line in lines:
-            smart_query = generate_specific_query(line, user_location)
-            results.append(smart_query)
-            st.success(f"**Broadcasted:** {smart_query}")
-        
-        # BROADCAST: Sending data to all connected browser profiles
-        sio.emit('new_query_batch', {'queries': results})
-    else:
-        st.warning("Please paste a list first.")
+if st.button("Push to All Profiles"):
+    lines = pasted_data.split('\n')
+    for line in lines:
+        if line.strip():
+            # Logic to pick the right niche
+            niche = "book" if "book" in line.lower() else ("diy" if "diy" in line.lower() else "default")
+            config = NICHE_MAP[niche]
+            
+            # Generate the "Natural" query
+            query = config["template"].format(
+                adj=random.choice(config["details"]),
+                item=line.strip(),
+                extra=random.choice(config["context"]),
+                loc=location
+            )
+            
+            # BROADCAST to all connected profiles
+            sio.emit('new_search', {'query': query})
+            st.success(f"Sent: {query}")
