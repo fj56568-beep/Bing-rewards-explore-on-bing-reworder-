@@ -1,7 +1,5 @@
 streamlit
-transformers
-torch --index-url https://download.pytorch.org/whl/cpu
-sentencepiece
+huggingface_hub
 python-socketio
 eventlet
 Flask
