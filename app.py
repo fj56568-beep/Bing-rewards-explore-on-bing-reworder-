@@ -10,57 +10,49 @@ except Exception:
     st.error("⚠️ HF_TOKEN not found in Streamlit Secrets!")
     st.stop()
 
-# 2. THE SMART HUMANIZER (With your requested System Prompt)
-def humanize_query(robotic_text):
+# 2. THE BATCH HUMANIZER
+def process_batch(robotic_lines):
+    # This prompt tells the AI to process the WHOLE list at once
+    combined_input = "\n".join([f"- {line}" for line in robotic_lines])
+    
+    system_instructions = (
+        "You are a human search assistant. I will give you a list of robotic topics. "
+        "For EACH topic, write one highly specific, natural search query. "
+        "Include technical details, brands, and clear actions (like 'compare' or 'deals'). "
+        "Provide ONLY the list of new queries, one per line. No extra text."
+    )
+    
     try:
-        # We use chat.completions to satisfy the 'conversational' requirement
-        response = client.chat.completions.create(
-            model="mistralai/Mistral-7B-Instruct-v0.2",
+        response = client.chat_completions.create(
+            model="HuggingFaceH4/zephyr-7b-beta",
             messages=[
-                {
-                    "role": "system", 
-                    "content": (
-                        "I have a list of topics below. For each one, generate a highly specific, "
-                        "natural-sounding search query. Imagine a person who knows exactly what they want "
-                        "(including details like brands, locations, or technical specs) and is asking a "
-                        "smart assistant for help. Make sure each query feels conversational but data-driven. "
-                        "Do not include any introductory text, just the search query itself."
-                    )
-                },
-                {
-                    "role": "user", 
-                    "content": f"Topic: {robotic_text}"
-                }
+                {"role": "system", "content": system_instructions},
+                {"role": "user", "content": f"Topics:\n{combined_input}"}
             ],
-            max_tokens=80,
+            max_tokens=500, # Increased to handle 16+ queries
             temperature=0.8
         )
-        return response.choices[0].message.content.strip()
-    
+        return response.choices[0].message.content.strip().split('\n')
     except Exception as e:
-        # If the API fails again, this tells us exactly why instead of giving a generic response
-        return f"Connection Error: {str(e)}"
+        return [f"API Error: {str(e)}"]
 
-# 3. UI LAYOUT
-st.set_page_config(page_title="Zaky's AI Broadcaster", page_icon="🌿")
-st.title("🌿 High-Intent Data Broadcaster")
+# 3. STREAMLIT UI
+st.title("🌿 High-Volume AI Broadcaster")
 
-pasted_list = st.text_area("Paste your 16 robotic queries here:", height=250)
+pasted_list = st.text_area("Paste your 16+ robotic queries here:", height=300)
 
 if st.button("🚀 Humanize & Broadcast"):
     lines = [l.strip() for l in pasted_list.split('\n') if l.strip()]
     
     if lines:
-        progress_bar = st.progress(0)
-        for i, line in enumerate(lines):
-            # Generate the specific, data-driven query
-            natural_query = humanize_query(line)
+        with st.spinner("Processing large batch..."):
+            # We process the whole list in one API call to save your 'Rate Limit'
+            results = process_batch(lines)
             
-            # Display result
-            st.success(f"**Broadcasted:** {natural_query}")
-            
-            # 1.5 second pause to stay under Hugging Face rate limits
-            time.sleep(1.5) 
-            progress_bar.progress((i + 1) / len(lines))
+            for query in results:
+                clean_query = query.strip("- ").strip()
+                if clean_query:
+                    # Your Socket.io code to send to Freddy/Zaky goes here
+                    st.success(f"**Broadcasted:** {clean_query}")
     else:
         st.warning("Please paste your list first.")
