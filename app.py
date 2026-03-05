@@ -2,8 +2,7 @@ import streamlit as st
 import time
 from huggingface_hub import InferenceClient
 
-# 1. SECURE TOKEN SETUP
-# Make sure you have added HF_TOKEN to your Streamlit Secrets!
+# 1. CLIENT SETUP
 try:
     hf_token = st.secrets["HF_TOKEN"]
     client = InferenceClient(api_key=hf_token)
@@ -11,41 +10,40 @@ except Exception:
     st.error("⚠️ HF_TOKEN not found in Streamlit Secrets!")
     st.stop()
 
-# 2. THE CHAT-BASED HUMANIZER
+# 2. THE SMART HUMANIZER (With your requested System Prompt)
 def humanize_query(robotic_text):
     try:
-        # Using chat.completions specifically to solve the 'Supported task' error
+        # We use chat.completions to satisfy the 'conversational' requirement
         response = client.chat.completions.create(
             model="mistralai/Mistral-7B-Instruct-v0.2",
             messages=[
                 {
                     "role": "system", 
                     "content": (
-                        "You are a human search assistant. Your job is to rewrite robotic commands "
-                        "into natural, high-intent search queries. You MUST include specific items, "
-                        "specific details, and specific actions (like 'deals' or 'how to'). "
-                        "Do not repeat words or stutter. Be concise."
+                        "I have a list of topics below. For each one, generate a highly specific, "
+                        "natural-sounding search query. Imagine a person who knows exactly what they want "
+                        "(including details like brands, locations, or technical specs) and is asking a "
+                        "smart assistant for help. Make sure each query feels conversational but data-driven. "
+                        "Do not include any introductory text, just the search query itself."
                     )
                 },
                 {
                     "role": "user", 
-                    "content": f"Rewrite this: {robotic_text}"
+                    "content": f"Topic: {robotic_text}"
                 }
             ],
-            max_tokens=70,
-            temperature=0.7 # Helps prevent repetition loops
+            max_tokens=80,
+            temperature=0.8
         )
         return response.choices[0].message.content.strip()
     
     except Exception as e:
-        # Fallback to ensure your broadcast never stops
-        clean = robotic_text.lower().replace("search on bing to find", "").strip()
-        return f"Looking for the best rated {clean} with reviews and current deals."
+        # If the API fails again, this tells us exactly why instead of giving a generic response
+        return f"Connection Error: {str(e)}"
 
-# 3. STREAMLIT INTERFACE
+# 3. UI LAYOUT
 st.set_page_config(page_title="Zaky's AI Broadcaster", page_icon="🌿")
-st.title("🌿 High-Intent Chat Broadcaster")
-st.markdown("Fixed for Mistral-7B Chat Completion Task.")
+st.title("🌿 High-Intent Data Broadcaster")
 
 pasted_list = st.text_area("Paste your 16 robotic queries here:", height=250)
 
@@ -55,14 +53,13 @@ if st.button("🚀 Humanize & Broadcast"):
     if lines:
         progress_bar = st.progress(0)
         for i, line in enumerate(lines):
-            # Step A: Generate the complete, humanized query
+            # Generate the specific, data-driven query
             natural_query = humanize_query(line)
             
-            # Step B: Display and Broadcast
-            # (Your Socket.io emit code goes here)
+            # Display result
             st.success(f"**Broadcasted:** {natural_query}")
             
-            # Step C: Safe-Timer (Prevents 429 Rate Limit errors)
+            # 1.5 second pause to stay under Hugging Face rate limits
             time.sleep(1.5) 
             progress_bar.progress((i + 1) / len(lines))
     else:
